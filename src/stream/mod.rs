@@ -46,6 +46,8 @@ mod range;
 #[cfg(feature = "unstable-recover")]
 #[cfg(feature = "std")]
 mod recoverable;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub mod session;
 mod stateful;
 #[cfg(test)]
 mod tests;
@@ -59,6 +61,22 @@ pub use range::Range;
 #[cfg(feature = "unstable-recover")]
 #[cfg(feature = "std")]
 pub use recoverable::Recoverable;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::Cancelled;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::FeedOutcome;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::FinalError;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::FinalErrorKind;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::FinalizeOutcome;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::PartialSession;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::SessionConfig;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::SessionError;
 pub use stateful::Stateful;
 pub use token::TokenSlice;
 

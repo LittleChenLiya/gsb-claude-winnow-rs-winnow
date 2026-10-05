@@ -224,6 +224,11 @@ name = "iterator"
 required-features = ["ascii"]
 
 [[example]]
+name = "partial_session"
+test = true
+required-features = ["alloc", "parser"]
+
+[[example]]
 name = "s_expression"
 required-features = ["alloc", "ascii"]
 
