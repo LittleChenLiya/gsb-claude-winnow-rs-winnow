@@ -17,6 +17,7 @@
 //! - [`ContextError`]
 //! - [`InputError`] (mostly for testing)
 //! - [`TreeError`] (mostly for testing)
+//! - [`DiagError`] for merging `alt` branches into short CLI diagnostics
 //! - [Custom errors][crate::_topic::error]
 
 #[cfg(feature = "alloc")]
@@ -898,6 +899,396 @@ impl core::fmt::Display for StrContextValue {
     }
 }
 
+/// Merge `alt` branch errors by furthest position, keeping commit layers separate
+///
+/// Unlike [`ContextError`], which piles all context onto a single stack, `DiagError`
+/// splits error context into explicit layers:
+/// - a *recoverable* layer where [`alt`][crate::combinator::alt] branches are merged by
+///   their furthest input position: the truly furthest branch wins and, on a tie, the
+///   expectations are merged while each branch source is preserved
+/// - a *committed* layer, started by [`cut_err`][crate::combinator::cut_err], that is kept
+///   separate from the recoverable layer and never demoted to a recoverable error
+///
+/// Only positions (as remaining-input lengths) and contexts are stored: rendering never
+/// re-runs the parser or copies the input, making this suitable for short CLI diagnostics.
+///
+/// Custom errors that cannot be interpreted (like from [`Parser::try_map`]) are recorded
+/// as opaque markers; no message is fabricated for them.
+///
+/// # Examples
+///
+/// Branches failing at different positions report only the truly furthest branch:
+/// ```rust
+/// # use winnow::prelude::*;
+/// # use winnow::combinator::alt;
+/// # use winnow::error::DiagError;
+/// # use winnow::error::StrContext;
+/// # use winnow::error::StrContextValue;
+/// let mut parser = alt((
+///     ("ab", "cx")
+///         .void()
+///         .context(StrContext::Expected(StrContextValue::Description("short token"))),
+///     ("ab", "c", "yz")
+///         .void()
+///         .context(StrContext::Expected(StrContextValue::Description("long token"))),
+/// ));
+///
+/// // The second branch made it furthest, so only its expectation is kept
+/// let err: DiagError = parser.parse_peek("abcy").unwrap_err();
+/// assert_eq!(err.recoverable().sources(), 1);
+/// assert_eq!(
+///     err.to_string(),
+///     "expected long token at 1 bytes before end of input",
+/// );
+/// ```
+///
+/// Branches failing at the same position merge their expectations while keeping
+/// both branch sources:
+/// ```rust
+/// # use winnow::prelude::*;
+/// # use winnow::combinator::alt;
+/// # use winnow::error::DiagError;
+/// # use winnow::error::StrContext;
+/// # use winnow::error::StrContextValue;
+/// let mut parser = alt((
+///     "hello".context(StrContext::Expected(StrContextValue::Description("greeting"))),
+///     "goodbye".context(StrContext::Expected(StrContextValue::Description("farewell"))),
+/// ));
+///
+/// let err: DiagError = parser.parse_peek("oops").unwrap_err();
+/// assert_eq!(err.recoverable().sources(), 2);
+/// assert_eq!(
+///     err.to_string(),
+///     "expected greeting, expected farewell (2 branches) at 4 bytes before end of input",
+/// );
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
+pub struct DiagError<C = StrContext> {
+    /// Recoverable context from `alt` branches, merged at the furthest position
+    recoverable: DiagLayer<C>,
+    /// Committed (`cut_err`) context, kept on a layer separate from `recoverable`
+    committed: Option<DiagLayer<C>>,
+}
+
+#[cfg(feature = "alloc")]
+impl<C> DiagError<C> {
+    /// Create an empty error
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Recoverable context from [`alt`][crate::combinator::alt] branches, merged at the
+    /// furthest position
+    ///
+    /// May be empty if the failure was [committed][Self::committed]
+    #[inline]
+    pub fn recoverable(&self) -> &DiagLayer<C> {
+        &self.recoverable
+    }
+
+    /// Committed ([`cut_err`][crate::combinator::cut_err]) context, kept on a layer
+    /// separate from the [recoverable][Self::recoverable] one
+    #[inline]
+    pub fn committed(&self) -> Option<&DiagLayer<C>> {
+        self.committed.as_ref()
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C> Default for DiagError<C> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            recoverable: DiagLayer::default(),
+            committed: None,
+        }
+    }
+}
+
+/// A layer of [`DiagError`] context
+///
+/// Layers keep [`alt`][crate::combinator::alt] branch context and
+/// [`cut_err`][crate::combinator::cut_err] commit context from piling up onto the same
+/// chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
+pub struct DiagLayer<C = StrContext> {
+    /// Remaining input at the furthest error position (smaller is further)
+    furthest: usize,
+    /// Expectations merged from the branches that failed at `furthest`
+    expected: alloc::vec::Vec<C>,
+    /// Number of `alt` branches merged into `expected`
+    sources: usize,
+    /// Number of uninterpretable custom errors recorded at `furthest`
+    opaque: usize,
+}
+
+#[cfg(feature = "alloc")]
+impl<C> DiagLayer<C> {
+    /// Remaining input length at the furthest error position
+    ///
+    /// For slice-like streams, the offset from the start of the input is
+    /// `input.len() - layer.furthest()`.
+    ///
+    /// Returns `None` when the layer is empty.
+    #[inline]
+    pub fn furthest(&self) -> Option<usize> {
+        (self.furthest != usize::MAX).then_some(self.furthest)
+    }
+
+    /// Expectations merged from the [`alt`][crate::combinator::alt] branches that failed
+    /// at the [furthest][Self::furthest] position
+    #[inline]
+    pub fn expected(&self) -> impl Iterator<Item = &C> {
+        self.expected.iter()
+    }
+
+    /// Number of [`alt`][crate::combinator::alt] branches merged into this layer
+    ///
+    /// Branches that failed at the same [furthest][Self::furthest] position have their
+    /// expectations merged, but each branch source is preserved here.
+    #[inline]
+    pub fn sources(&self) -> usize {
+        self.sources
+    }
+
+    /// Number of uninterpretable custom errors recorded in this layer
+    ///
+    /// These are reported as opaque markers; no message is fabricated for them.
+    #[inline]
+    pub fn opaque(&self) -> usize {
+        self.opaque
+    }
+
+    /// Whether any error context was recorded in this layer
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.sources == 0
+    }
+
+    fn at(furthest: usize) -> Self {
+        Self {
+            furthest,
+            expected: alloc::vec::Vec::new(),
+            sources: 1,
+            opaque: 0,
+        }
+    }
+
+    fn or(self, other: Self) -> Self {
+        match self.furthest.cmp(&other.furthest) {
+            // The branch that made it furthest (least remaining input) is the most
+            // relevant one to report
+            core::cmp::Ordering::Less => self,
+            core::cmp::Ordering::Greater => other,
+            // The branches failed at the same position: merge the expectations while
+            // preserving each branch source
+            core::cmp::Ordering::Equal => {
+                let mut expected = self.expected;
+                expected.extend(other.expected);
+                Self {
+                    furthest: self.furthest,
+                    expected,
+                    sources: self.sources + other.sources,
+                    opaque: self.opaque + other.opaque,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C> Default for DiagLayer<C> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            furthest: usize::MAX,
+            expected: alloc::vec::Vec::new(),
+            sources: 0,
+            opaque: 0,
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<I: Stream, C> ParserError<I> for DiagError<C> {
+    type Inner = Self;
+
+    #[inline]
+    fn from_input(input: &I) -> Self {
+        Self {
+            recoverable: DiagLayer::at(input.eof_offset()),
+            committed: None,
+        }
+    }
+
+    fn or(self, other: Self) -> Self {
+        let Self {
+            recoverable,
+            committed,
+        } = self;
+        let committed = match (committed, other.committed) {
+            // A committed failure must not be demoted to a recoverable one
+            (Some(committed), None) => {
+                return Self {
+                    recoverable,
+                    committed: Some(committed),
+                };
+            }
+            (None, Some(committed)) => {
+                return Self {
+                    recoverable: other.recoverable,
+                    committed: Some(committed),
+                };
+            }
+            (Some(first), Some(second)) => Some(first.or(second)),
+            (None, None) => None,
+        };
+        Self {
+            recoverable: recoverable.or(other.recoverable),
+            committed,
+        }
+    }
+
+    #[inline(always)]
+    fn is_backtrack(&self) -> bool {
+        self.committed.is_none()
+    }
+
+    #[inline(always)]
+    fn into_inner(self) -> Result<Self::Inner, Self> {
+        Ok(self)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C> ModalError for DiagError<C> {
+    fn cut(mut self) -> Self {
+        if self.committed.is_none() {
+            // Move the recoverable layer onto its own committed layer so commit
+            // context does not pile onto the same chain
+            self.committed = Some(core::mem::take(&mut self.recoverable));
+        }
+        self
+    }
+
+    fn backtrack(mut self) -> Self {
+        if let Some(committed) = self.committed.take() {
+            self.recoverable = committed;
+        }
+        self
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C, I: Stream> AddContext<I, C> for DiagError<C> {
+    #[inline]
+    fn add_context(
+        mut self,
+        _input: &I,
+        _token_start: &<I as Stream>::Checkpoint,
+        context: C,
+    ) -> Self {
+        let layer = self.committed.as_mut().unwrap_or(&mut self.recoverable);
+        layer.expected.push(context);
+        self
+    }
+}
+
+#[cfg(feature = "unstable-recover")]
+#[cfg(feature = "std")]
+impl<I: Stream, C> FromRecoverableError<I, Self> for DiagError<C> {
+    #[inline]
+    fn from_recoverable_error(
+        _token_start: &<I as Stream>::Checkpoint,
+        _err_start: &<I as Stream>::Checkpoint,
+        _input: &I,
+        e: Self,
+    ) -> Self {
+        e
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C, I: Stream, E> FromExternalError<I, E> for DiagError<C> {
+    #[inline]
+    fn from_external_error(input: &I, _e: E) -> Self {
+        // Unsupported custom errors cannot be interpreted: record an opaque marker
+        // rather than fabricating a message
+        let mut recoverable = DiagLayer::at(input.eof_offset());
+        recoverable.opaque = 1;
+        Self {
+            recoverable,
+            committed: None,
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C> ErrorConvert<Self> for DiagError<C> {
+    #[inline]
+    fn convert(self) -> Self {
+        self
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C: fmt::Display> fmt::Display for DiagError<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.committed() {
+            Some(committed) if self.recoverable.is_empty() => {
+                write!(f, "committed failure: {committed}")
+            }
+            Some(committed) => {
+                write!(
+                    f,
+                    "committed failure: {committed}; recoverable: {}",
+                    self.recoverable
+                )
+            }
+            None if self.recoverable.is_empty() => write!(f, "parse error"),
+            None => write!(f, "{}", self.recoverable),
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<C: fmt::Display> fmt::Display for DiagLayer<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut separate = false;
+        for context in &self.expected {
+            if separate {
+                write!(f, ", ")?;
+            }
+            write!(f, "{context}")?;
+            separate = true;
+        }
+        for _ in 0..self.opaque {
+            if separate {
+                write!(f, ", ")?;
+            }
+            // Unsupported custom error: report the marker only, do not fabricate text
+            write!(f, "<opaque>")?;
+            separate = true;
+        }
+        if !separate {
+            write!(f, "parse error")?;
+        }
+        if 1 < self.sources {
+            write!(f, " ({} branches)", self.sources)?;
+        }
+        if let Some(furthest) = self.furthest() {
+            write!(f, " at {furthest} bytes before end of input")?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "std")]
+impl<C: fmt::Debug + fmt::Display> std::error::Error for DiagError<C> {}
+
 /// Trace all error paths, particularly for tests
 #[derive(Debug)]
 #[cfg(feature = "std")]
@@ -1409,6 +1800,102 @@ fn translate_position(input: &[u8], index: usize) -> (usize, usize) {
     let column = column + column_offset;
 
     (line, column)
+}
+
+#[cfg(test)]
+#[cfg(feature = "parser")]
+#[cfg(feature = "alloc")]
+mod test_diag_error {
+    use super::*;
+    use crate::combinator::alt;
+    use crate::combinator::cut_err;
+    use crate::Parser;
+
+    fn expected(description: &'static str) -> StrContext {
+        StrContext::Expected(StrContextValue::Description(description))
+    }
+
+    #[test]
+    fn furthest_branch_wins() {
+        // The branches fail at different positions: only the truly furthest is kept
+        let mut parser = alt((
+            ("ab", "cx").void().context(expected("short token")),
+            ("ab", "c", "yz").void().context(expected("long token")),
+        ));
+        let err: DiagError = parser.parse_peek("abcy").unwrap_err();
+        let layer = err.recoverable();
+        assert_eq!(layer.furthest(), Some(1));
+        assert_eq!(layer.sources(), 1);
+        assert_eq!(
+            layer.expected().collect::<Vec<_>>(),
+            vec![&expected("long token")]
+        );
+        assert!(err.committed().is_none());
+    }
+
+    #[test]
+    fn same_position_merges_expectations_keeping_sources() {
+        // The branches fail at the same position: expectations merge, but both
+        // branch sources are preserved
+        let mut parser = alt((
+            "hello".context(expected("greeting")),
+            "goodbye".context(expected("farewell")),
+        ));
+        let err: DiagError = parser.parse_peek("oops").unwrap_err();
+        let layer = err.recoverable();
+        assert_eq!(layer.furthest(), Some(4));
+        assert_eq!(layer.sources(), 2);
+        assert_eq!(
+            layer.expected().collect::<Vec<_>>(),
+            vec![&expected("greeting"), &expected("farewell")]
+        );
+    }
+
+    #[test]
+    fn commit_is_not_reported_as_recoverable() {
+        let mut parser = alt((
+            ("+", cut_err("abc")).void().context(expected("signed")),
+            "oops".void().context(expected("fallback")),
+        ));
+        let err: DiagError = parser.parse_peek("+ab!").unwrap_err();
+        assert!(!<DiagError as ParserError<&str>>::is_backtrack(&err));
+        assert!(err.recoverable().is_empty());
+        let committed = err.committed().unwrap();
+        assert_eq!(committed.furthest(), Some(3));
+        assert_eq!(
+            committed.expected().collect::<Vec<_>>(),
+            vec![&expected("signed")]
+        );
+        assert_eq!(
+            err.to_string(),
+            "committed failure: expected signed at 3 bytes before end of input"
+        );
+    }
+
+    #[test]
+    fn committed_or_recoverable_stays_committed() {
+        // Even a further-along recoverable error must not demote a committed one
+        let recoverable_input = "a";
+        let recoverable = DiagError::<StrContext>::from_input(&recoverable_input);
+        let committed_input = "abcde";
+        let committed = DiagError::<StrContext>::from_input(&committed_input).cut();
+        let merged = <DiagError<StrContext> as ParserError<&str>>::or(recoverable, committed);
+        assert!(!<DiagError<StrContext> as ParserError<&str>>::is_backtrack(
+            &merged
+        ));
+        assert!(merged.committed().is_some());
+    }
+
+    #[test]
+    fn external_error_is_opaque() {
+        // Unsupported custom errors are marked opaque without fabricating text
+        let mut parser = "abc".try_map(|_: &str| "x".parse::<u8>());
+        let err: DiagError = parser.parse_peek("abc").unwrap_err();
+        let layer = err.recoverable();
+        assert_eq!(layer.opaque(), 1);
+        assert_eq!(layer.expected().count(), 0);
+        assert_eq!(err.to_string(), "<opaque> at 3 bytes before end of input");
+    }
 }
 
 #[cfg(test)]
