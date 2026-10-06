@@ -7,6 +7,7 @@
 //!   [spans][crate::Parser::with_span]
 //! - [`Stateful`] to thread global state through your parsers
 //! - [`Partial`] can mark an input as partial buffer that is being streamed into
+//! - [`Session`] can drive a parser over incrementally-fed [`Partial`] input
 //! - [Custom stream types][crate::_topic::stream]
 
 use core::hash::BuildHasher;
@@ -46,6 +47,8 @@ mod range;
 #[cfg(feature = "unstable-recover")]
 #[cfg(feature = "std")]
 mod recoverable;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub mod session;
 mod stateful;
 #[cfg(test)]
 mod tests;
@@ -59,6 +62,18 @@ pub use range::Range;
 #[cfg(feature = "unstable-recover")]
 #[cfg(feature = "std")]
 pub use recoverable::Recoverable;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::FeedReport;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::FinalizeReport;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::Session;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::SessionConfig;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::SessionError;
+#[cfg(all(feature = "alloc", feature = "parser"))]
+pub use session::SessionSummary;
 pub use stateful::Stateful;
 pub use token::TokenSlice;
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Features
+
+- Add `stream::Session`, an explicit streaming parse session over `Partial` input that saves the real `Needed` and consumed position on `Incomplete`, resumes when chunks are appended, rejects input growth beyond the configured capacity before buffering, binds sessions to their parser and `SessionConfig` generation, and only converts a temporary `Incomplete` into a final error (at the real stream position) on `finalize`
+
 ## [1.0.4] - 2026-07-13
 
 ### Fixes

@@ -18,6 +18,10 @@
 //! If the chunks are not homogeneous, a state machine will be needed to track what the expected
 //! parser is for the next chunk.
 //!
+//! For a ready-made abstraction over this loop, see [`Session`][crate::stream::Session], which
+//! owns the buffer, tracks the real [`Needed`] and consumed position across chunks, and only
+//! converts a temporary `Incomplete` into a final error when the input is finalized.
+//!
 //! Caveats:
 //! - `winnow` takes the approach of re-parsing from scratch. Chunks should be relatively small to
 //!   prevent the re-parsing overhead from dominating.

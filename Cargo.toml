@@ -216,6 +216,11 @@ test = true
 required-features = ["std", "ascii"]
 
 [[example]]
+name = "partial_session"
+test = true
+required-features = ["alloc", "parser"]
+
+[[example]]
 name = "json_iterator"
 required-features = ["std", "ascii"]
 
