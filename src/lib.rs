@@ -102,6 +102,9 @@ mod macros;
 #[cfg(feature = "parser")]
 pub mod error;
 
+#[cfg(all(feature = "parser", feature = "alloc"))]
+pub mod diag;
+
 #[cfg(feature = "parser")]
 mod parser;
 
