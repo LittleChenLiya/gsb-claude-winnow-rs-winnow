@@ -164,6 +164,7 @@ mod branch;
 mod core;
 mod debug;
 mod expression;
+mod guard;
 mod multi;
 mod sequence;
 
@@ -183,6 +184,10 @@ pub use self::branch::{alt, Alt};
 pub use self::core::{backtrack_err, cond, cut_err, empty, eof, fail, not, opt, peek, todo};
 pub use self::debug::trace;
 pub use self::expression::{expression, Expression, Infix, Postfix, Prefix};
+pub use self::guard::{
+    checkpoint_guard, checkpoint_guard_with, CheckpointGuard, CloneState, GuardRecovery,
+    PositionOnly,
+};
 #[cfg(feature = "alloc")]
 pub use self::multi::separated_foldr1;
 pub use self::multi::{
