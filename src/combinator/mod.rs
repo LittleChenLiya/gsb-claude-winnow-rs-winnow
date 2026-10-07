@@ -161,6 +161,7 @@
 //! - [`bool`][crate::binary::bits::bool]: Match any one bit
 
 mod branch;
+mod checkpoint;
 mod core;
 mod debug;
 mod expression;
@@ -180,6 +181,9 @@ pub use crate::seq;
 pub use crate::unordered_seq;
 
 pub use self::branch::{alt, Alt};
+pub use self::checkpoint::{
+    checkpoint_guard, checkpoint_guard_with, CheckpointGuard, GuardPolicy, PositionOnly, WithState,
+};
 pub use self::core::{backtrack_err, cond, cut_err, empty, eof, fail, not, opt, peek, todo};
 pub use self::debug::trace;
 pub use self::expression::{expression, Expression, Infix, Postfix, Prefix};
